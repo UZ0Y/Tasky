@@ -1,0 +1,1 @@
+A discord bot skeleton. nothing interesting for today

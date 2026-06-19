@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+
+# Environment variables (BOT TOKEN goes here – never commit this!)
+.env
+*.env
+
+# SQLite databases (so your local test data stays private)
+*.db
+*.sqlite
+*.sqlite3
+db.sqlite3
+
+# IDE / Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and runtime data
+*.log
+*.pid
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Project-specific config files (if you store tokens in JSON)
+config.json
+settings.json
