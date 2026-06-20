@@ -1,15 +1,34 @@
 import discord
 from dotenv import load_dotenv
-import aiohttp, asyncio, os, sqlite3
+import aiohttp, asyncio, os, logging
+
+import database
 
 load_dotenv()
+handler = logging.FileHandler(filename="Discord.log", mode="w", encoding="utf-8")
 
 class MyClient(discord.Client):
     async def on_ready(self):
         print(f"Logged in as {self.user}")
+
+        await database.initialize_db()
+        print("db initialized")
+    async def on_message(self, message):
+        if message.author == self.user:
+            return
+        
+        parser:str = message.content
+        
+        if parser == "Task":
+            print("""TASK FORMAT\n
+                  Task => Title\n\t body""")
+
+        if parser[:4] == "Task":
+            pass
+        
     
-    async def  on_message(self):
-        print(f"message from {self.author}:\n\t {self.content}")
+        
+        
 
 def main():
     intents = discord.Intents.default()
@@ -17,9 +36,9 @@ def main():
 
     client = MyClient(intents=intents)
     try:
-        client.run(_ = os.getenv("TOKEN"))
-    except all:
-        print("run failed")
+        client.run(os.getenv("TOKEN"), log_handler=handler, log_level=logging.DEBUG)
+    except Exception as e:
+        print(f"run failed: {e}")
 
-if __name__ == "__name__":
+if __name__ == "__main__":
     main()
