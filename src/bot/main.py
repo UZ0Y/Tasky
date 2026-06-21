@@ -2,7 +2,7 @@ import discord
 from dotenv import load_dotenv
 import aiohttp, asyncio, os, logging
 
-from shared import database
+from src.shared import database
 
 load_dotenv()
 handler = logging.FileHandler(filename="Discord.log", mode="w", encoding="utf-8")
