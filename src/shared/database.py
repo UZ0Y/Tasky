@@ -1,7 +1,6 @@
 import aiosqlite
 
-# The database file name
-DB_NAME = "Tasks.db"
+from .config import DB_PATH
 
 async def initialize_db():
     """Initializes the database and creates the necessary tables."""
