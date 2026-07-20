@@ -27,6 +27,15 @@ class Database:
                     timestamp TEXT
                 )
             """)
+            await db.execute("""
+            CREATE TABLE IF NOT EXISTS PROACTIVE_QUEUE (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER,
+                content TEXT,
+                status TEXT DEFAULT 'PENDING',
+                timestamp TEXT
+                )
+            """)
             await db.commit()
 
     async def add_task(self, author_id, head, body, iso_time_stamp):
@@ -46,3 +55,12 @@ class Database:
                 (author_id, author_name, channel_id, content, iso_time_stamp)
             )
             await db.commit()
+    
+    async def get_last_channel_id(self):
+        """Retrieves the channel_id of the most recent message logged in the database."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT channel_id FROM MESSAGE_HISTORY ORDER BY id DESC LIMIT 1"
+            ) as cursor:
+                row = await cursor.fetchone()
+                return row[0] if row else None
