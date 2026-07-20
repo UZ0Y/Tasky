@@ -21,6 +21,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS MESSAGE_HISTORY (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     author_id INTEGER,
+                    author_name TEXT,
                     channel_id INTEGER,
                     content TEXT,
                     timestamp TEXT
@@ -37,11 +38,11 @@ class Database:
             )
             await db.commit()
 
-    async def add_message_history(self, author_id, channel_id, content, iso_time_stamp):
+    async def add_message_history(self, author_id, author_name, channel_id, content, iso_time_stamp):
         """Inserts a new message log into the database."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
-                "INSERT INTO MESSAGE_HISTORY (author_id, channel_id, content, timestamp) VALUES (?, ?, ?, ?)",
-                (author_id, channel_id, content, iso_time_stamp)
+                "INSERT INTO MESSAGE_HISTORY (author_id, author_name, channel_id, content, timestamp) VALUES (?, ?, ?, ?, ?)",
+                (author_id, author_name, channel_id, content, iso_time_stamp)
             )
             await db.commit()
