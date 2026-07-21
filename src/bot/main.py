@@ -5,12 +5,14 @@ import os, logging, sys, asyncio, aiosqlite
 from datetime import datetime, timezone
 from pathlib import Path
 from src.shared.database import Database
+from src.shared.gemini_handler import ResponseGenerator
 from src.shared.config import DB_PATH, LOG_PATH
 db = Database()
 
 
 
-ROOT = Path(__file__).resolve().parents[1]
+# main.py lives in src/bot; the project root (and .env) is two levels above.
+ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
@@ -87,14 +89,19 @@ class MyClient(discord.Client):
         await db.initialize_db()
         print("db initialized")
 
+        await db.label_missing_author_names(self.user.id, self.user.name)
+        print("message history normalized")
+
         self.process_queue_loop.start()
         print("listener activated")
-    
+
+        self.ai = ResponseGenerator(db)
+        print("Response generator activated")
     async def on_message(self, message):
         try:
             await db.add_message_history(
                 author_id=message.author.id,
-                author_name=message.author.global_name,
+                author_name=message.author.global_name or message.author.name,
                 channel_id=message.channel.id,
                 content=message.content,
                 iso_time_stamp=datetime.now(timezone.utc).isoformat()
@@ -132,6 +139,16 @@ class MyClient(discord.Client):
                 else:
                     await message.channel.send("Failed to create the task. Please try again later.")
                     print(f"Failed to add task: {e}")
+        print("[DEBUG] 6. Bypassed tasks. Proceeding to AI generation...")
+        author_name = message.author.global_name or message.author.name
+        ai_reply = await self.ai.generate_reactive_response(
+            author_name=author_name,
+            channel_id=message.channel.id,
+            user_message=message.content
+        )
+        print(f"[DEBUG] 7. AI Reply received: '{ai_reply}'")
+        await message.channel.send(ai_reply)
+        print("[DEBUG] 8. AI reply successfully sent to Discord channel.")
 
     async def send_proactive_message(self, channel_id: int, content: str):
         """Sends a message to a specific channel proactively from anywhere."""
