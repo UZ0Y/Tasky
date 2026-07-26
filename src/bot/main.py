@@ -1,102 +1,46 @@
 import discord
 from discord.ext import tasks
-from dotenv import load_dotenv
-import os, logging, sys, asyncio, aiosqlite
+import os
+import sys
+import logging
+import asyncio
 from datetime import datetime, timezone
-from pathlib import Path
+
+from src.shared.config import DB_PATH, LOG_PATH, TOKEN
 from src.shared.database import Database
 from src.shared.gemini_handler import ResponseGenerator
-from src.shared.config import DB_PATH, LOG_PATH
+import aiosqlite
+
 db = Database()
 
+logger = logging.getLogger(__name__)
 
-
-# main.py lives in src/bot; the project root (and .env) is two levels above.
-ROOT = Path(__file__).resolve().parents[2]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-
-load_dotenv(dotenv_path=ROOT / ".env")
-handler = logging.FileHandler(filename=LOG_PATH, mode="w", encoding="utf-8")
-
-TASK_USAGE = "Task => <Title>\n<Body>"
-
-
-def parse_task_message(content: str):
-    lines = content.splitlines()
-    if not lines:
-        return None
-
-    first_line = lines[0].strip()
-    if not first_line.startswith("Task"):
-        return None
-
-    remainder = first_line[4:].strip()
-    if remainder.startswith("=>"):
-        head = remainder[2:].strip()
-    elif remainder.startswith(":"):
-        head = remainder[1:].strip()
-    else:
-        head = remainder
-
-    if not head:
-        return None
-
-    body = "\n".join(line.strip() for line in lines[1:]).strip()
-    return head, body
-
-
-def format_task_help() -> str:
-    return f"TASK FORMAT\n{TASK_USAGE}"
-
-
-TASK_USAGE = "Task => <Title>\n<Body>"
-
-
-def parse_task_message(content: str):
-    lines = content.splitlines()
-    if not lines:
-        return None
-
-    first_line = lines[0].strip()
-    if not first_line.startswith("Task"):
-        return None
-
-    remainder = first_line[4:].strip()
-    if remainder.startswith("=>"):
-        head = remainder[2:].strip()
-    elif remainder.startswith(":"):
-        head = remainder[1:].strip()
-    else:
-        head = remainder
-
-    if not head:
-        return None
-
-    body = "\n".join(line.strip() for line in lines[1:]).strip()
-    return head, body
-
-
-def format_task_help() -> str:
-    return f"TASK FORMAT\n{TASK_USAGE}"
-
+if not logger.handlers:
+    file_handler = logging.FileHandler(filename=LOG_PATH, mode="w", encoding="utf-8")
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    file_handler.setFormatter(formatter)
+    logger.addHandler(file_handler)
+    logger.setLevel(logging.INFO)
 
 class MyClient(discord.Client):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     async def on_ready(self):
-        print(f"Logged in as {self.user}")
+        logger.info(f"Logged in as {self.user}")
 
         await db.initialize_db()
-        print("db initialized")
+        logger.info("db initialized")
 
         await db.label_missing_author_names(self.user.id, self.user.name)
-        print("message history normalized")
+        logger.info("message history normalized")
 
-        self.process_queue_loop.start()
-        print("listener activated")
+        self.loop.create_task(self.process_queue_loop())
+        logger.info("listener activated")
 
         self.ai = ResponseGenerator(db)
-        print("Response generator activated")
+        logger.info("Response generator activated")
+
     async def on_message(self, message):
         try:
             await db.add_message_history(
@@ -106,49 +50,77 @@ class MyClient(discord.Client):
                 content=message.content,
                 iso_time_stamp=datetime.now(timezone.utc).isoformat()
             )
-        
         except Exception as db_err:
-            # طباعة الخطأ في الكونسول حتى لا يعطل عمل البوت الأساسي إذا فشل الاتصال بالداتابيس
-            print(f"[Database Error] Failed to log message: {db_err}")
-        # =========================================================
+            logger.error(f"[Database Error] Failed to log message: {db_err}")
 
-        # 1. تجاهل رسائل البوت نفسه لمنع التكرار اللانهائي
+        # Ignore bot's own messages
         if message.author == self.user:
             return
 
-        # اللوجيك الأصلي الخاص بالـ Tasks دون تعديل أو تخريب
         content = message.content.strip()
-        if content == "Task":
-            await message.channel.send(format_task_help())
-            return
+        command = content.casefold()
 
-        if content.startswith("Task"):
-            parsed = parse_task_message(content)
-            if parsed is None:
-                await message.channel.send(format_task_help())
-                return
+        # Check database for pending transactions instead of self.pending_tasks
+        try:
+            pending_task = await db.get_pending_task(message.author.id, message.channel.id)
+        except Exception as e:
+            logger.error(f"Error fetching pending task: {e}")
+            pending_task = None
 
-            head, body = parsed
+        if pending_task and command == "confirm":
             timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
             try:
-                await db.add_task(message.author.id, head, body, timestamp)
-                await message.channel.send(f"Task created: **{head}**")
+                await db.add_task(
+                    message.author.id,
+                    pending_task["title"],
+                    pending_task["body"],
+                    timestamp,
+                )
+                await db.delete_pending_task(message.author.id, message.channel.id)
+                await message.channel.send(f"Task created: **{pending_task['title']}**")
+            except aiosqlite.IntegrityError:
+                await message.channel.send("A task with that title already exists. Please choose a different title.")
             except Exception as e:
-                if "UNIQUE" in str(e).upper():
-                    await message.channel.send("A task with that title already exists. Please choose a different title.")
-                else:
-                    await message.channel.send("Failed to create the task. Please try again later.")
-                    print(f"Failed to add task: {e}")
-        print("[DEBUG] 6. Bypassed tasks. Proceeding to AI generation...")
+                logger.error(f"Failed to create the task: {e}")
+                await message.channel.send("Failed to create the task. Please try again later.")
+            return
+
+        if pending_task and command == "cancel":
+            try:
+                await db.delete_pending_task(message.author.id, message.channel.id)
+            except Exception as e:
+                logger.error(f"Failed to delete pending task: {e}")
+            await message.channel.send("Okay, I discarded that task proposal.")
+            return
+
+        intent = await self.ai.analyze_message_intent(content)
+        if intent.get("intent") == "create_task":
+            try:
+                await db.set_pending_task(
+                    message.author.id, 
+                    message.channel.id, 
+                    intent["title"], 
+                    intent["body"],
+                    datetime.now(timezone.utc).isoformat()
+                )
+            except Exception as e:
+                logger.error(f"Error writing pending task: {e}")
+            
+            await message.channel.send(
+                f"I found a task: **{intent['title']}**. Reply `confirm` to create it or `cancel` to discard it."
+            )
+            return
+
+        logger.info("[DEBUG] Bypassed tasks. Proceeding to AI generation...")
         author_name = message.author.global_name or message.author.name
         ai_reply = await self.ai.generate_reactive_response(
             author_name=author_name,
             channel_id=message.channel.id,
             user_message=message.content
         )
-        print(f"[DEBUG] 7. AI Reply received: '{ai_reply}'")
+        logger.info(f"[DEBUG] AI Reply received: '{ai_reply}'")
         await message.channel.send(ai_reply)
-        print("[DEBUG] 8. AI reply successfully sent to Discord channel.")
+        logger.info("[DEBUG] AI reply successfully sent to Discord channel.")
 
     async def send_proactive_message(self, channel_id: int, content: str):
         """Sends a message to a specific channel proactively from anywhere."""
@@ -161,34 +133,32 @@ class MyClient(discord.Client):
                 await channel.send(content)
                 return True
             else:
-                print(f"Channel {channel_id} is not a text channel.")
+                logger.warning(f"Channel {channel_id} is not a text channel.")
                 return False
         except Exception as e:
-            print(f"Failed to send proactive message: {e}")
+            logger.error(f"Failed to send proactive message: {e}")
             return False
 
-    @tasks.loop(seconds=2.0)
     async def process_queue_loop(self):
         """Polls the database every 2 seconds for new proactive messages to send."""
-        async with aiosqlite.connect(DB_PATH) as db:
-            async with db.execute("SELECT id, channel_id, content FROM PROACTIVE_QUEUE WHERE status = 'PENDING'") as cursor:
-                rows = await cursor.fetchall()
-                
-                for row in rows:
-                    msg_id, channel_id, content = row
-                    
-                    # Call your class's proactive message method
-                    success = await self.send_proactive_message(channel_id, content)
-                    
-                    if success:
-                        # Mark as sent so it doesn't send twice
-                        await db.execute("UPDATE PROACTIVE_QUEUE SET status = 'SENT' WHERE id = ?", (msg_id,))
-                        await db.commit()
-                        print(f"✅ Delivered queued message {msg_id}")
-    
-    @process_queue_loop.before_loop
-    async def before_process_queue(self):
         await self.wait_until_ready()
+        while not self.is_closed():
+            try:
+                async with aiosqlite.connect(DB_PATH) as db_conn:
+                    async with db_conn.execute("SELECT id, channel_id, content FROM PROACTIVE_QUEUE WHERE status = 'PENDING'") as cursor:
+                        rows = await cursor.fetchall()
+                        
+                        for msg_id, channel_id, content in rows:
+                            success = await self.send_proactive_message(channel_id, content)
+                            
+                            if success:
+                                await db_conn.execute("UPDATE PROACTIVE_QUEUE SET status = 'SENT' WHERE id = ?", (msg_id,))
+                                await db_conn.commit()
+                                logger.info(f"Delivered queued message {msg_id}")
+            except Exception as e:
+                logger.error(f"Scheduler loop error: {e}")
+            await asyncio.sleep(2.0)
+
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -197,9 +167,12 @@ client = MyClient(intents=intents)
 
 def main():
     try:
-        client.run(os.getenv("TOKEN"), log_handler=handler, log_level=logging.DEBUG)
+        if not TOKEN:
+            logger.error("No token provided.")
+            sys.exit(1)
+        client.run(TOKEN, log_handler=logging.FileHandler(filename=LOG_PATH, mode="w", encoding="utf-8"), log_level=logging.INFO)
     except Exception as e:
-        print(f"run failed: {e}")
+        logger.error(f"run failed: {e}")
 
 if __name__ == "__main__":
     main()
