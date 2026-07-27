@@ -207,3 +207,6 @@ As an intern, you can run standalone helper scripts to test specific segments of
     ```bash
     python -m src.tester_tools.terminal_sender
     ```
+
+
+## this was ai generated
