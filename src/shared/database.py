@@ -8,7 +8,7 @@ class Database:
 
     async def initialize_db(self):
         """Creates tables and applies safe, repeatable TASKS schema migrations."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             await db.execute("PRAGMA journal_mode=WAL;")
             await db.execute("PRAGMA synchronous=NORMAL;")
             await db.execute("PRAGMA busy_timeout=5000;")
@@ -17,11 +17,12 @@ class Database:
                 CREATE TABLE IF NOT EXISTS TASKS (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     author_id INTEGER,
-                    head TEXT UNIQUE,
+                    head TEXT,
                     body TEXT,
                     timestamp TEXT,
                     status TEXT NOT NULL DEFAULT 'OPEN',
-                    last_updated TEXT
+                    last_updated TEXT,
+                    UNIQUE(author_id, head)
                 )
             """)
 
@@ -76,7 +77,7 @@ class Database:
     async def add_task(self, author_id, head, body, iso_time_stamp=None):
         """Inserts a new task into the database."""
         timestamp = iso_time_stamp or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             await db.execute(
                 """
                 INSERT INTO TASKS (author_id, head, body, timestamp, status, last_updated)
@@ -88,7 +89,7 @@ class Database:
 
     async def add_message_history(self, author_id, author_name, channel_id, content, iso_time_stamp):
         """Inserts a new message log into the database."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             await db.execute(
                 "INSERT INTO MESSAGE_HISTORY (author_id, author_name, channel_id, content, timestamp) VALUES (?, ?, ?, ?, ?)",
                 (author_id, author_name, channel_id, content, iso_time_stamp)
@@ -97,7 +98,7 @@ class Database:
 
     async def label_missing_author_names(self, author_id: int, author_name: str):
         """Labels existing messages from an author that were saved without a display name."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             await db.execute(
                 """
                 UPDATE MESSAGE_HISTORY
@@ -111,7 +112,7 @@ class Database:
     
     async def get_last_channel_id(self):
         """Retrieves the channel_id of the most recent message logged in the database."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             async with db.execute(
                 "SELECT channel_id FROM MESSAGE_HISTORY ORDER BY id DESC LIMIT 1"
             ) as cursor:
@@ -120,7 +121,7 @@ class Database:
             
     async def get_channel_history(self, channel_id: int, limit: int = 15):
         """Retrieves recent message history for a given channel for LLM context."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             async with db.execute(
                 "SELECT author_name, content, timestamp FROM MESSAGE_HISTORY WHERE channel_id = ? ORDER BY id DESC LIMIT ?",
                 (channel_id, limit)
@@ -132,7 +133,7 @@ class Database:
 
     async def set_pending_task(self, author_id: int, channel_id: int, title: str, body: str, timestamp: str):
         """Writes or updates a pending task."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             await db.execute(
                 """
                 INSERT INTO PENDING_TASKS (author_id, channel_id, title, body, timestamp)
@@ -148,7 +149,7 @@ class Database:
 
     async def get_pending_task(self, author_id: int, channel_id: int):
         """Retrieves a pending task if it exists."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
             async with db.execute(
                 "SELECT title, body, timestamp FROM PENDING_TASKS WHERE author_id = ? AND channel_id = ?",
                 (author_id, channel_id)
@@ -160,7 +161,23 @@ class Database:
 
     async def delete_pending_task(self, author_id: int, channel_id: int):
         """Deletes a pending task."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
+            await db.execute(
+                "DELETE FROM PENDING_TASKS WHERE author_id = ? AND channel_id = ?",
+                (author_id, channel_id)
+            )
+            await db.commit()
+
+    async def confirm_pending_task(self, author_id: int, channel_id: int, title: str, body: str, timestamp: str):
+        """Atomically confirms a pending task and removes it from the queue."""
+        async with aiosqlite.connect(self.db_path, timeout=5.0) as db:
+            await db.execute(
+                """
+                INSERT INTO TASKS (author_id, head, body, timestamp, status, last_updated)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (author_id, title, body, timestamp, "OPEN", timestamp),
+            )
             await db.execute(
                 "DELETE FROM PENDING_TASKS WHERE author_id = ? AND channel_id = ?",
                 (author_id, channel_id)
