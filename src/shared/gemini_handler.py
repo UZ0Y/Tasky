@@ -55,17 +55,17 @@ create a personal task. Return JSON only, with exactly these fields:
   "confidence": number from 0 to 1,
   "reason": string
 }
-Use create_task only for an explicit, actionable request or commitment. Normal
-conversation, status updates, questions, hypotheticals, and vague goals are not
-tasks. Do not infer missing commitments. For non_task and uncertain, title must
-be null and body must be an empty string. This is only a proposal; never claim a
-task has already been created.
+- Use "create_task" for an explicit, actionable request or commitment (e.g., "I will complete my essay", "Remind me to run 5k").
+- For "create_task", you MUST extract or generate a short, descriptive string for "title".
+- Normal conversation, status updates, questions, hypotheticals, and vague goals are "non_task".
+- For "non_task" and "uncertain", "title" MUST be null and "body" MUST be an empty string ("").
+- This is a proposal mechanism; never claim a task was already created.
 """.strip()
 
         try:
             response = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=f"Classify this message:\n{message_content}",
+                contents=f"Classify the following message bounded by <user_message> tags:\n<user_message>\n{message_content}\n</user_message>",
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
                     temperature=0,
@@ -73,7 +73,23 @@ task has already been created.
                     response_mime_type="application/json",
                 ),
             )
-            payload = json.loads(response.text)
+            text = response.text
+            if text:
+                text = text.strip()
+            if not text:
+                raise ValueError("Response text is empty or blank")
+            
+            # Remove any unwanted Markdown codeblock formatting the AI might add
+            if text.startswith("```json"):
+                text = text[7:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+                
+            payload = json.loads(text)
+        except ValueError as exc:
+            logger.warning(f"[AI Error] Intent parsing failed or was blocked by safety (ValueError): {exc}")
+            return fallback
         except Exception as exc:
             logger.warning(f"[AI Error] Intent classification attempt failed: {exc}")
             raise # Raise for tenacity retry
@@ -129,7 +145,7 @@ task has already been created.
         )
         prompt = (
             f"Recent Conversation History:\n{history}\n\n"
-            f"Latest User Message from {author_name}: {user_message}\n\n"
+            f"Latest User Message from {author_name} (bounded by <user_message> tags):\n<user_message>\n{user_message}\n</user_message>\n\n"
             "Provide a short, direct reactive response."
         )
 
@@ -143,7 +159,13 @@ task has already been created.
                     max_output_tokens=1000,
                 )
             )
-            return response.text.strip() if response.text else "Got it."
+            text = response.text
+            if not text:
+                raise ValueError("Response text is empty")
+            return text.strip()
+        except ValueError as e:
+            logger.warning(f"[AI Error] Reactive generation blocked by safety (ValueError): {e}")
+            return "Got it."
         except Exception as e:
             logger.warning(f"[AI Error] Reactive generation attempt failed: {e}")
             raise # Raise for tenacity retry
@@ -174,7 +196,13 @@ task has already been created.
                     max_output_tokens=400,
                 )
             )
-            return response.text.strip() if response.text else "Hey! Just checking in on your goals today. How's progress?"
+            text = response.text
+            if not text:
+                raise ValueError("Response text is empty")
+            return text.strip()
+        except ValueError as e:
+            logger.warning(f"[AI Error] Proactive generation blocked by safety (ValueError): {e}")
+            return "Hey! Just checking in on your goals today. How's progress?"
         except Exception as e:
             logger.warning(f"[AI Error] Proactive generation attempt failed: {e}")
             raise # Raise for tenacity retry

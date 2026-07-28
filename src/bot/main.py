@@ -25,6 +25,7 @@ if not logger.handlers:
 class MyClient(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
+        self.bg_task_started = False
 
     async def on_ready(self):
         logger.info(f"Logged in as {self.user}")
@@ -35,8 +36,10 @@ class MyClient(discord.Client):
         await db.label_missing_author_names(self.user.id, self.user.name)
         logger.info("message history normalized")
 
-        self.loop.create_task(self.process_queue_loop())
-        logger.info("listener activated")
+        if not self.bg_task_started:
+            self.loop.create_task(self.process_queue_loop())
+            self.bg_task_started = True
+            logger.info("listener activated")
 
         self.ai = ResponseGenerator(db)
         logger.info("Response generator activated")
@@ -70,13 +73,13 @@ class MyClient(discord.Client):
         if pending_task and command == "confirm":
             timestamp = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
             try:
-                await db.add_task(
+                await db.confirm_pending_task(
                     message.author.id,
+                    message.channel.id,
                     pending_task["title"],
                     pending_task["body"],
                     timestamp,
                 )
-                await db.delete_pending_task(message.author.id, message.channel.id)
                 await message.channel.send(f"Task created: **{pending_task['title']}**")
             except aiosqlite.IntegrityError:
                 await message.channel.send("A task with that title already exists. Please choose a different title.")
@@ -144,7 +147,7 @@ class MyClient(discord.Client):
         await self.wait_until_ready()
         while not self.is_closed():
             try:
-                async with aiosqlite.connect(DB_PATH) as db_conn:
+                async with aiosqlite.connect(DB_PATH, timeout=5.0) as db_conn:
                     async with db_conn.execute("SELECT id, channel_id, content FROM PROACTIVE_QUEUE WHERE status = 'PENDING'") as cursor:
                         rows = await cursor.fetchall()
                         
