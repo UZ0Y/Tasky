@@ -1,4 +1,5 @@
 import aiosqlite
+<<<<<<< Updated upstream
 from datetime import datetime, timezone
 from src.shared.config import DB_PATH
 
@@ -183,3 +184,51 @@ class Database:
                 (author_id, channel_id)
             )
             await db.commit()
+=======
+from .config import DB_PATH 
+
+async def initialize_db():
+    """Initializes the database and creates the necessary tables."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # جدول المهمات الأصلي
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS TASKS (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                author_id INTEGER,
+                head TEXT UNIQUE,
+                body TEXT,
+                timestamp TEXT
+            )
+        """)
+        
+        # الجدول الجديد للرسائل 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS MESSAGES (
+                message_id INTEGER PRIMARY KEY,
+                author_id INTEGER,
+                channel_id INTEGER,
+                content TEXT,
+                date TEXT
+            )
+        """)
+        await db.commit()
+
+async def add_task(author_id, head, body, iso_time_stamp):
+    """Inserts a new task into the database."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO TASKS (author_id, head, body, timestamp) VALUES (?, ?, ?, ?)",
+            (author_id, head, body, iso_time_stamp)
+        )
+        await db.commit()
+
+# الفنكشن الجديد
+async def add_message(message_id, author_id, channel_id, content, date_str):
+    """Inserts a logged discord message into the database."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "INSERT INTO MESSAGES (message_id, author_id, channel_id, content, date) VALUES (?, ?, ?, ?, ?)",
+            (message_id, author_id, channel_id, content, date_str)
+        )
+        await db.commit()
+>>>>>>> Stashed changes

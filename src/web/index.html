@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tasky Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Tajawal', sans-serif; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+
+    <!-- Header / Navbar -->
+    <header class="bg-gray-800 border-b border-gray-700 p-4 sticky top-0 z-10 shadow-lg">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-bold text-indigo-400 flex items-center gap-2">
+                🤖 Tasky AI Dashboard
+            </h1>
+            <div class="flex gap-2">
+                <button onclick="switchTab('tasks')" id="tab-tasks" class="px-4 py-2 rounded-lg font-medium transition bg-indigo-600 text-white">
+                    📋 المهمات (Tasks)
+                </button>
+                <button onclick="switchTab('messages')" id="tab-messages" class="px-4 py-2 rounded-lg font-medium transition bg-gray-700 hover:bg-gray-600 text-gray-300">
+                    💬 سجل الرسائل (Messages)
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto p-6">
+        
+        <!-- SECTION: TASKS -->
+        <section id="section-tasks" class="space-y-4">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl font-semibold text-gray-200">قائمة المهام المسجلة</h2>
+                <button onclick="loadTasks()" class="text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded border border-gray-700 transition">
+                    🔄 تحديث البيانات
+                </button>
+            </div>
+            <div id="tasks-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                <!-- Tasks will load here -->
+            </div>
+        </section>
+
+        <!-- SECTION: MESSAGES -->
+        <section id="section-messages" class="space-y-4 hidden">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl font-semibold text-gray-200">سجل رسائل الديسكورد (آخر 100)</h2>
+                <button onclick="loadMessages()" class="text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded border border-gray-700 transition">
+                    🔄 تحديث البيانات
+                </button>
+            </div>
+            <div class="bg-gray-800 rounded-xl border border-gray-700 overflow-hidden shadow">
+                <table class="w-full text-right border-collapse">
+                    <thead class="bg-gray-900/50 text-gray-400 text-sm">
+                        <tr>
+                            <th class="p-3 border-b border-gray-700">Message ID</th>
+                            <th class="p-3 border-b border-gray-700">Author ID</th>
+                            <th class="p-3 border-b border-gray-700">Channel ID</th>
+                            <th class="p-3 border-b border-gray-700">المحتوى</th>
+                            <th class="p-3 border-b border-gray-700">التاريخ</th>
+                        </tr>
+                    </thead>
+                    <tbody id="messages-tbody" class="divide-y divide-gray-700 text-sm">
+                        <!-- Messages will load here -->
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        const API_URL = "http://localhost:8000/api";
+
+        function switchTab(tab) {
+            const tasksTab = document.getElementById('tab-tasks');
+            const messagesTab = document.getElementById('tab-messages');
+            const tasksSec = document.getElementById('section-tasks');
+            const messagesSec = document.getElementById('section-messages');
+
+            if (tab === 'tasks') {
+                tasksTab.className = "px-4 py-2 rounded-lg font-medium transition bg-indigo-600 text-white";
+                messagesTab.className = "px-4 py-2 rounded-lg font-medium transition bg-gray-700 hover:bg-gray-600 text-gray-300";
+                tasksSec.classList.remove('hidden');
+                messagesSec.classList.add('hidden');
+                loadTasks();
+            } else {
+                messagesTab.className = "px-4 py-2 rounded-lg font-medium transition bg-indigo-600 text-white";
+                tasksTab.className = "px-4 py-2 rounded-lg font-medium transition bg-gray-700 hover:bg-gray-600 text-gray-300";
+                messagesSec.classList.remove('hidden');
+                tasksSec.classList.add('hidden');
+                loadMessages();
+            }
+        }
+
+        async function loadTasks() {
+            const container = document.getElementById('tasks-container');
+            container.innerHTML = '<div class="col-span-full text-center py-8 text-gray-500">جاري التحميل...</div>';
+            
+            try {
+                const res = await fetch(`${API_URL}/tasks`);
+                const json = await res.json();
+                
+                if (json.data.length === 0) {
+                    container.innerHTML = '<div class="col-span-full text-center py-8 text-gray-500">لا توجد مهمات مسجلة حالياً</div>';
+                    return;
+                }
+
+                container.innerHTML = json.data.map(task => `
+                    <div class="bg-gray-800 border border-gray-700 rounded-xl p-5 shadow-sm hover:border-indigo-500/50 transition flex flex-col justify-between">
+                        <div>
+                            <div class="flex justify-between items-start mb-2">
+                                <h3 class="font-bold text-lg text-indigo-300">${escapeHtml(task.head)}</h3>
+                                <button onclick="deleteTask(${task.id})" class="text-xs bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20 px-2 py-1 rounded">حذف</button>
+                            </div>
+                            <p class="text-gray-300 text-sm whitespace-pre-wrap mb-4">${escapeHtml(task.body || 'لا يوجد تفاصيل')}</p>
+                        </div>
+                        <div class="text-xs text-gray-500 border-t border-gray-700/50 pt-3 flex justify-between">
+                            <span>المستخدم: ${task.author_id}</span>
+                            <span>${task.timestamp || ''}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (err) {
+                container.innerHTML = `<div class="col-span-full text-center py-8 text-red-400">حدث خطأ أثناء جلب المهام: ${err.message}</div>`;
+            }
+        }
+
+        async function loadMessages() {
+            const tbody = document.getElementById('messages-tbody');
+            tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-500">جاري التحميل...</td></tr>';
+
+            try {
+                const res = await fetch(`${API_URL}/messages`);
+                const json = await res.json();
+
+                if (json.data.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="text-center py-8 text-gray-500">لا توجد رسائل مسجلة حتى الآن</td></tr>';
+                    return;
+                }
+
+                tbody.innerHTML = json.data.map(msg => `
+                    <tr class="hover:bg-gray-700/30 transition">
+                        <td class="p-3 font-mono text-xs text-indigo-400">${msg.message_id}</td>
+                        <td class="p-3 font-mono text-xs text-gray-400">${msg.author_id}</td>
+                        <td class="p-3 font-mono text-xs text-gray-400">${msg.channel_id}</td>
+                        <td class="p-3 text-gray-200">${escapeHtml(msg.content)}</td>
+                        <td class="p-3 text-xs text-gray-400 dir-ltr text-right">${msg.date}</td>
+                    </tr>
+                `).join('');
+            } catch (err) {
+                tbody.innerHTML = `<tr><td colspan="5" class="text-center py-8 text-red-400">حدث خطأ: ${err.message}</td></tr>`;
+            }
+        }
+
+        async function deleteTask(id) {
+            if(!confirm("هل أنت تأكد من حذف هذه المهمة؟")) return;
+            await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE' });
+            loadTasks();
+        }
+
+        function escapeHtml(text) {
+            if (!text) return '';
+            return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        }
+
+        // Initial Load
+        loadTasks();
+    </script>
+</body>
+</html>
