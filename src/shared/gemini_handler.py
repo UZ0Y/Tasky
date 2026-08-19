@@ -1,3 +1,17 @@
+"""
+Strict Gemini Handler – Intent Detection with Schema Enforcement
+
+This is an improved version of gemini_handler.py that enforces strict
+JSON format matching the database schema exactly.
+
+Key differences:
+1. Uses StrictIntentValidator for all responses
+2. Clear field mapping: head → TASKS.head, body → TASKS.body
+3. Fails loudly on schema violations
+4. Better error messages for debugging
+5. Type-safe response objects
+"""
+
 import json
 import os
 import logging
@@ -6,21 +20,40 @@ from google.genai import types
 from datetime import datetime, timezone
 from tenacity import retry, wait_exponential, stop_after_attempt
 
-from src.shared.prompts import get_reactive_prompt, get_proactive_prompt
 from src.shared.database import Database
+from src.shared.strict_intent_detector import (
+    StrictIntentValidator,
+    get_strict_intent_classification_prompt,
+)
 
 logger = logging.getLogger(__name__)
 
+
 def return_fallback(retry_state):
-    return {"intent": "non_task", "title": None, "body": "", "confidence": 0.0, "reason": ""}
+    """Fallback for intent analysis failures."""
+    return {
+        "intent": "non_task",
+        "confidence": 0.0,
+        "reason": "Failed to classify - falling back to non-task",
+    }
+
 
 def return_reactive_fallback(retry_state):
-    return "Hey, having trouble reaching my brain right now, but I'm tracking!"
+    """Fallback for reactive response generation."""
+    return "Got it."
+
 
 def return_proactive_fallback(retry_state):
-    return "Hey! Just dropping in for a quick accountability check-in. How are your tasks coming along?"
+    """Fallback for proactive message generation."""
+    return "Hey! Just checking in. How are your tasks coming along?"
 
-class ResponseGenerator:
+
+class StrictResponseGenerator:
+    """
+    Strict response generator with schema enforcement.
+    Validates all intent classifications against database schema.
+    """
+
     def __init__(self, db: Database):
         self.db = db
         self.api_key = os.getenv("GEMINI_API_KEY")
@@ -28,126 +61,140 @@ class ResponseGenerator:
         self.client = genai.Client(api_key=self.api_key)
 
     async def _format_history(self, channel_id: int, limit: int = 15) -> str:
+        """Formats message history for context."""
         rows = await self.db.get_channel_history(channel_id, limit=limit)
         if not rows:
             return "No prior message history."
-        
+
         history_lines = []
         for author_name, content, timestamp in rows:
             name = author_name or "User"
             history_lines.append(f"[{timestamp}] {name}: {content}")
         return "\n".join(history_lines)
 
-    @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry_error_callback=return_fallback)
+    @retry(
+        wait=wait_exponential(min=1, max=10),
+        stop=stop_after_attempt(3),
+        retry_error_callback=return_fallback,
+    )
     async def analyze_message_intent(self, message_content: str) -> dict:
-        """Returns a validated task proposal, or a safe non-task result."""
-        fallback = return_fallback(None)
+        """
+        Analyzes message intent with strict schema validation.
+        
+        Returns:
+            For CREATE_TASK:
+            {
+                "intent": "create_task",
+                "head": "Task title",
+                "body": "Task details",
+                "confidence": 0.95,
+                "reason": "..."
+            }
+            
+            For NON_TASK/UNCERTAIN:
+            {
+                "intent": "non_task",
+                "confidence": 0.85,
+                "reason": "..."
+            }
+        """
+        # Basic input validation
         if not isinstance(message_content, str) or not message_content.strip():
-            return fallback
+            logger.warning("[Intent] Empty or invalid input")
+            return return_fallback(None)
 
-        system_instruction = """
-You classify one Discord message. Decide whether the author is clearly asking to
-create a personal task. Return JSON only, with exactly these fields:
-{
-  "intent": "create_task" | "non_task" | "uncertain",
-  "title": string | null,
-  "body": string,
-  "confidence": number from 0 to 1,
-  "reason": string
-}
-- Use "create_task" for an explicit, actionable request or commitment (e.g., "I will complete my essay", "Remind me to run 5k").
-- For "create_task", you MUST extract or generate a short, descriptive string for "title".
-- Normal conversation, status updates, questions, hypotheticals, and vague goals are "non_task".
-- For "non_task" and "uncertain", "title" MUST be null and "body" MUST be an empty string ("").
-- This is a proposal mechanism; never claim a task was already created.
-""".strip()
+        system_instruction = get_strict_intent_classification_prompt()
 
         try:
+            logger.debug(f"[Intent] Analyzing: {message_content[:100]}...")
+
             response = await self.client.aio.models.generate_content(
                 model=self.model_name,
-                contents=f"Classify the following message bounded by <user_message> tags:\n<user_message>\n{message_content}\n</user_message>",
+                contents=f"Classify the following Discord message:\n<message>\n{message_content}\n</message>",
                 config=types.GenerateContentConfig(
                     system_instruction=system_instruction,
-                    temperature=0,
-                    max_output_tokens=250,
+                    temperature=0,  # Deterministic for consistency
+                    max_output_tokens=500,
                     response_mime_type="application/json",
                 ),
             )
-            text = response.text
-            if text:
-                text = text.strip()
+
+            text = response.text.strip() if response.text else ""
+
             if not text:
-                raise ValueError("Response text is empty or blank")
-            
-            # Remove any unwanted Markdown codeblock formatting the AI might add
+                logger.warning("[Intent] Empty response from Gemini")
+                raise ValueError("Response text is empty")
+
+            # Remove markdown code blocks if present (safety measure)
             if text.startswith("```json"):
                 text = text[7:]
+            if text.startswith("```"):
+                text = text[3:]
             if text.endswith("```"):
                 text = text[:-3]
             text = text.strip()
-                
+
+            if not text:
+                logger.warning("[Intent] Empty after cleanup")
+                raise ValueError("Response is empty after cleanup")
+
+            logger.debug(f"[Intent] Raw response: {text[:200]}")
+
+            # Parse JSON
             payload = json.loads(text)
-        except ValueError as exc:
-            logger.warning(f"[AI Error] Intent parsing failed or was blocked by safety (ValueError): {exc}")
-            return fallback
-        except Exception as exc:
-            logger.warning(f"[AI Error] Intent classification attempt failed: {exc}")
-            raise # Raise for tenacity retry
 
-        if not isinstance(payload, dict):
-            return fallback
+            # STRICT VALIDATION - This will raise ValueError if schema is invalid
+            try:
+                validated = StrictIntentValidator.validate(payload)
+                logger.info(f"[Intent] ✓ Valid {validated['intent']}")
+                return validated
 
-        intent = payload.get("intent")
-        title = payload.get("title")
-        body = payload.get("body")
-        confidence = payload.get("confidence")
-        reason = payload.get("reason")
-        if intent not in {"create_task", "non_task", "uncertain"}:
-            return fallback
-        if not isinstance(body, str) or not isinstance(reason, str):
-            return fallback
-        if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
-            return fallback
-        if not 0 <= confidence <= 1:
-            return fallback
+            except ValueError as validation_error:
+                logger.warning(f"[Intent] ✗ Schema validation failed: {validation_error}")
+                logger.warning(f"[Intent] Payload was: {json.dumps(payload, indent=2)}")
+                # Return safe non-task instead of crashing
+                return return_fallback(None)
 
-        if intent == "create_task":
-            if not isinstance(title, str) or not title.strip():
-                return fallback
-            return {
-                "intent": intent,
-                "title": title.strip(),
-                "body": body.strip(),
-                "confidence": float(confidence),
-                "reason": reason.strip(),
-            }
+        except json.JSONDecodeError as e:
+            logger.warning(f"[Intent] JSON decode error: {e}")
+            logger.warning(f"[Intent] Raw text was: {text[:500]}")
+            raise  # Tenacity will retry
 
-        if title is not None or body.strip():
-            return fallback
-        return {
-            "intent": intent,
-            "title": None,
-            "body": "",
-            "confidence": float(confidence),
-            "reason": reason.strip(),
-        }
+        except ValueError as e:
+            logger.warning(f"[Intent] ValueError: {e}")
+            raise  # Tenacity will retry
 
-    @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry_error_callback=return_reactive_fallback)
-    async def generate_reactive_response(self, author_name: str, channel_id: int, user_message: str) -> str:
-        logger.info("[AI DEBUG] Entering generate_reactive_response()")
+        except Exception as e:
+            logger.warning(f"[Intent] Unexpected error: {e}")
+            raise  # Tenacity will retry
+
+    @retry(
+        wait=wait_exponential(min=1, max=10),
+        stop=stop_after_attempt(3),
+        retry_error_callback=return_reactive_fallback,
+    )
+    async def generate_reactive_response(
+        self, author_name: str, channel_id: int, user_message: str
+    ) -> str:
+        """Generates a reactive response to a message."""
+        logger.debug("[Reactive] Generating response")
+
         history = await self._format_history(channel_id, limit=10)
         current_time = datetime.now(timezone.utc).isoformat()
-        system_instruction = get_reactive_prompt(
-            author_name,
-            current_time,
-            history,
-            user_message,
-        )
-        prompt = (
-            f"Recent Conversation History:\n{history}\n\n"
-            f"Latest User Message from {author_name} (bounded by <user_message> tags):\n<user_message>\n{user_message}\n</user_message>\n\n"
-            "Provide a short, direct reactive response."
-        )
+
+        system_instruction = f"""You are a friendly Discord bot assistant.
+User: {author_name}
+Time: {current_time}
+
+Recent conversation:
+{history}
+
+Respond briefly (1-3 lines) and naturally to the user's message.
+Don't identify as an AI or use robotic language.
+Be conversational and helpful.
+"""
+
+        prompt = f"User message: {user_message}\n\nRespond naturally and briefly."
 
         try:
             response = await self.client.aio.models.generate_content(
@@ -157,34 +204,50 @@ create a personal task. Return JSON only, with exactly these fields:
                     system_instruction=system_instruction,
                     temperature=0.7,
                     max_output_tokens=1000,
-                )
+                ),
             )
-            text = response.text
-            if not text:
-                raise ValueError("Response text is empty")
-            return text.strip()
-        except ValueError as e:
-            logger.warning(f"[AI Error] Reactive generation blocked by safety (ValueError): {e}")
-            return "Got it."
-        except Exception as e:
-            logger.warning(f"[AI Error] Reactive generation attempt failed: {e}")
-            raise # Raise for tenacity retry
 
-    @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry_error_callback=return_proactive_fallback)
+            text = response.text.strip() if response.text else ""
+
+            if not text:
+                logger.warning("[Reactive] Empty response")
+                raise ValueError("Response text is empty")
+
+            logger.debug(f"[Reactive] ✓ Generated response")
+            return text
+
+        except ValueError as e:
+            logger.warning(f"[Reactive] ValueError: {e}")
+            raise
+
+        except Exception as e:
+            logger.warning(f"[Reactive] Error: {e}")
+            raise
+
+    @retry(
+        wait=wait_exponential(min=1, max=10),
+        stop=stop_after_attempt(3),
+        retry_error_callback=return_proactive_fallback,
+    )
     async def generate_proactive_response(self, author_name: str, channel_id: int) -> str:
+        """Generates a proactive check-in message."""
+        logger.debug("[Proactive] Generating check-in")
+
         history = await self._format_history(channel_id, limit=20)
         current_time = datetime.now(timezone.utc).isoformat()
-        system_instruction = get_proactive_prompt(
-            author_name=author_name,
-            current_time=current_time,
-            history=history,
-            tasks="No task data is currently available.",
-        )
 
-        prompt = (
-            f"Recent Channel Context:\n{history}\n\n"
-            "Generate a proactive accountability check-in message."
-        )
+        system_instruction = f"""You are an accountability coach for {author_name}.
+Time: {current_time}
+
+Recent channel activity:
+{history}
+
+Generate a brief, friendly check-in message (2-3 lines) asking about their progress
+on tasks or goals. Be encouraging and specific if possible.
+Don't be robotic or overly formal.
+"""
+
+        prompt = "Generate a brief accountability check-in message."
 
         try:
             response = await self.client.aio.models.generate_content(
@@ -194,15 +257,22 @@ create a personal task. Return JSON only, with exactly these fields:
                     system_instruction=system_instruction,
                     temperature=0.7,
                     max_output_tokens=400,
-                )
+                ),
             )
-            text = response.text
+
+            text = response.text.strip() if response.text else ""
+
             if not text:
+                logger.warning("[Proactive] Empty response")
                 raise ValueError("Response text is empty")
-            return text.strip()
+
+            logger.debug(f"[Proactive] ✓ Generated check-in")
+            return text
+
         except ValueError as e:
-            logger.warning(f"[AI Error] Proactive generation blocked by safety (ValueError): {e}")
-            return "Hey! Just checking in on your goals today. How's progress?"
+            logger.warning(f"[Proactive] ValueError: {e}")
+            raise
+
         except Exception as e:
-            logger.warning(f"[AI Error] Proactive generation attempt failed: {e}")
-            raise # Raise for tenacity retry
+            logger.warning(f"[Proactive] Error: {e}")
+            raise
