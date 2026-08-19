@@ -35,32 +35,53 @@ Tasky/
 ## Setup
 
 1. **Clone the repository** and navigate into the project folder:
+
    ```bash
    git clone <repo-url>
    cd Tasky
    ```
 
 2. **Install dependencies**:
+
    ```bash
    pip install -r requirements.txt
    ```
 
 3. **Create a `.env` file** in the root directory with the following variables:
+
    ```
    TOKEN=your_discord_bot_token_here
    GEMINI_API_KEY=your_gemini_api_key_here
    GEMINI_MODEL=gemini-2.5-flash
    ```
+
    The bot will exit on startup if any of these are missing.
 
 4. **(Optional) Test the Gemini API**:
+
    ```bash
    python -m src.tester_tools.test_gemini
    ```
 
 5. **Run the bot**:
+   Tasky includes two designated launchers.
+
+   For local development or simple testing:
+
    ```bash
-   python -m src.bot.main
+   python run_bot.py
+   ```
+
+   For production, or to run both the Discord bot and the web server concurrently with graceful shutdown support:
+
+   ```bash
+   python entrypoint.py
+   ```
+
+   For a containerized deployment:
+
+   ```bash
+   docker-compose up -d
    ```
 
 ## Web Dashboard Integration

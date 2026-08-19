@@ -49,6 +49,7 @@ graph TD
 ```
 
 ### Key Components
+
 1. **Config ([src/shared/config.py](*/Tasky/src/shared/config.py))**: Centralizes application constants, directory setup (`data/`, `logs/`), and environment variable validation (`TOKEN`, `GEMINI_API_KEY`). It enforces failsafes, exiting immediately if environment variables are missing.
 2. **Database ([src/shared/database.py](*/Tasky/src/shared/database.py))**: Handles non-blocking database queries via `aiosqlite`.
 3. **Prompts ([src/shared/prompts.py](*/Tasky/src/shared/prompts.py))**: Stores LLM personas and prompt templates for bot behavior.
@@ -67,6 +68,7 @@ SQLite is traditionally a single-process database. However, Tasky is designed to
 3. **Busy Timeout**: Configured to `5000ms`. If the database is locked, rather than immediately failing, the query waits up to 5 seconds for the lock to clear.
 
 These operations are executed asynchronously during DB initialization:
+
 ```python
 await db.execute("PRAGMA journal_mode=WAL;")
 await db.execute("PRAGMA synchronous=NORMAL;")
@@ -77,52 +79,55 @@ await db.execute("PRAGMA busy_timeout=5000;")
 
 There are 4 main tables in `Tasks.db`:
 
-*   **`TASKS`**: Confirmed tasks belonging to users.
-    *   `id` (INTEGER, PK): Unique task ID.
-    *   `author_id` (INTEGER): The Discord User ID.
-    *   `head` (TEXT): A short descriptive title.
-    *   `body` (TEXT): In-depth task details.
-    *   `timestamp` (TEXT): Creation ISO timestamp.
-    *   `status` (TEXT): Default `'OPEN'`.
-    *   `last_updated` (TEXT): Last time modified.
-    *   *Constraint*: `UNIQUE(author_id, head)` prevents duplicate tasks with the same title for the same user.
-*   **`MESSAGE_HISTORY`**: Logs all channel messages (bot and users) to provide contextual memory to the LLM.
-    *   `id` (INTEGER, PK)
-    *   `author_id` (INTEGER)
-    *   `author_name` (TEXT)
-    *   `channel_id` (INTEGER)
-    *   `content` (TEXT)
-    *   `timestamp` (TEXT)
-*   **`PROACTIVE_QUEUE`**: A queue facilitating third-party integrations (e.g., cron jobs, web servers).
-    *   `id` (INTEGER, PK)
-    *   `channel_id` (INTEGER): Channel to send the message to.
-    *   `content` (TEXT): Message string.
-    *   `status` (TEXT): Default `'PENDING'`. Scheduled tasks are updated to `'SENT'` upon delivery.
-    *   `timestamp` (TEXT)
-*   **`PENDING_TASKS`**: Stores temporary draft tasks while waiting for user confirmation.
-    *   `author_id` (INTEGER)
-    *   `channel_id` (INTEGER)
-    *   `title` (TEXT)
-    *   `body` (TEXT)
-    *   `timestamp` (TEXT)
-    *   *Constraint*: `PRIMARY KEY (author_id, channel_id)` ensures a user has at most one pending task proposal per channel at any given time.
+* **`TASKS`**: Confirmed tasks belonging to users.
+  * `id` (INTEGER, PK): Unique task ID.
+  * `author_id` (INTEGER): The Discord User ID.
+  * `head` (TEXT): A short descriptive title.
+  * `body` (TEXT): In-depth task details.
+  * `timestamp` (TEXT): Creation ISO timestamp.
+  * `status` (TEXT): Default `'OPEN'`.
+  * `last_updated` (TEXT): Last time modified.
+  * *Constraint*: `UNIQUE(author_id, head)` prevents duplicate tasks with the same title for the same user.
+* **`MESSAGE_HISTORY`**: Logs all channel messages (bot and users) to provide contextual memory to the LLM.
+  * `id` (INTEGER, PK)
+  * `author_id` (INTEGER)
+  * `author_name` (TEXT)
+  * `channel_id` (INTEGER)
+  * `content` (TEXT)
+  * `timestamp` (TEXT)
+* **`PROACTIVE_QUEUE`**: A queue facilitating third-party integrations (e.g., cron jobs, web servers).
+  * `id` (INTEGER, PK)
+  * `channel_id` (INTEGER): Channel to send the message to.
+  * `content` (TEXT): Message string.
+  * `status` (TEXT): Default `'PENDING'`. Scheduled tasks are updated to `'SENT'` upon delivery.
+  * `timestamp` (TEXT)
+* **`PENDING_TASKS`**: Stores temporary draft tasks while waiting for user confirmation.
+  * `author_id` (INTEGER)
+  * `channel_id` (INTEGER)
+  * `title` (TEXT)
+  * `body` (TEXT)
+  * `timestamp` (TEXT)
+  * *Constraint*: `PRIMARY KEY (author_id, channel_id)` ensures a user has at most one pending task proposal per channel at any given time.
 
 ---
 
 ## 🤖 Gemini LLM Integration & Prompting
 
 Tasky uses the Google GenAI SDK with `gemini-2.5-flash` for fast classification and natural response generation. It features auto-retry capabilities via the `tenacity` library:
+
 ```python
 @retry(wait=wait_exponential(min=1, max=10), stop=stop_after_attempt(3), retry_error_callback=return_fallback)
 ```
+
 If the API fails to respond or is rate-limited, it automatically backs off (1s to 10s) and tries 3 times before returning a graceful fallback default.
 
 Let's examine how each mode operates:
 
 ### 1. Intent Analysis & Structured JSON Classification
+
 When a user types a message, Gemini decides if the user wants to create a task. We configure the model to return **strictly validated JSON** matching a schema by enforcing:
-- `response_mime_type="application/json"`
-- A precise system instruction.
+* `response_mime_type="application/json"`
+* A precise system instruction.
 
 ```json
 {
@@ -137,8 +142,9 @@ When a user types a message, Gemini decides if the user wants to create a task. 
 The validation layer inside `analyze_message_intent` guarantees that if `intent` is `create_task`, `title` is non-empty, and if it's `non_task`, `title` is `None` and `body` is empty.
 
 ### 2. Conversational response Modes
+
 - **Reactive (`generate_reactive_response`)**: Handles replies. System instructions mandate a maximum length of 1–3 lines, conversational tone, and absolute avoidance of robotic phrases (e.g., "As an AI").
-- **Proactive (`generate_proactive_response`)**: Used for checking in on tasks. The instruction focuses on reviewing active tasks and prompting for progress updates.
+* **Proactive (`generate_proactive_response`)**: Used for checking in on tasks. The instruction focuses on reviewing active tasks and prompting for progress updates.
 
 ---
 
@@ -182,7 +188,9 @@ sequenceDiagram
 ```
 
 ### Proactive Polling Loop
+
 Simultaneously, `main.py` launches a background worker loop `process_queue_loop()` that runs indefinitely:
+
 1. Every **2 seconds**, it polls the `PROACTIVE_QUEUE` table looking for records where `status = 'PENDING'`.
 2. It attempts to send the message to the target `channel_id`.
 3. If successful, it marks the queue record status as `'SENT'`.
@@ -191,22 +199,37 @@ This enables any script or dashboard (like web backend servers) to schedule or t
 
 ---
 
+## 🚀 Launching the Application
+
+Tasky now provides two dedicated entrypoints to start the bot, replacing the old `python -m src.bot.main` approach:
+
+1. **`run_bot.py`**: A lightweight launcher designed for fast local development and testing. It spins up the Discord bot with clear error handling.
+2. **`entrypoint.py`**: The production-grade launcher. It handles initializing the database explicitly, catching graceful shutdown signals (SIGINT/SIGTERM), and can concurrently run the Flask web server alongside the Discord bot.
+
+To launch in production via Docker, simply use `docker-compose up -d`.
+
+---
+
 ## 🛠️ Testing & Development Tools
 
 As an intern, you can run standalone helper scripts to test specific segments of the bot without opening Discord:
 
-1.  **Connectivity check**: Validate your `.env` settings and connection to Gemini:
+1. **Connectivity check**: Validate your `.env` settings and connection to Gemini:
+
     ```bash
     python -m src.tester_tools.api_tester
     ```
-2.  **Intent Classifier Check**: Send dummy strings (e.g., *"I will complete my essay"*) and view the structured JSON returned:
+
+2. **Intent Classifier Check**: Send dummy strings (e.g., *"I will complete my essay"*) and view the structured JSON returned:
+
     ```bash
     python -m src.tester_tools.test_intent
     ```
-3.  **Proactive Queue Injector**: Queue and test proactive message delivery to the last active channel recorded in your DB:
+
+3. **Proactive Queue Injector**: Queue and test proactive message delivery to the last active channel recorded in your DB:
+
     ```bash
     python -m src.tester_tools.terminal_sender
     ```
-
 
 ## this was ai generated
