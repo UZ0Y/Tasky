@@ -1,0 +1,49 @@
+version: '3.9'
+
+services:
+  # Main Tasky Bot + Web Server
+  tasky:
+    build: .
+    container_name: tasky-bot
+    restart: unless-stopped
+    environment:
+      TOKEN: ${TOKEN}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      FLASK_DEBUG: ${FLASK_DEBUG:-False}
+    ports:
+      - "5000:5000"  # Web dashboard
+    volumes:
+      - ./data:/app/data           # Persistent SQLite database
+      - ./logs:/app/logs           # Persistent logs
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os; exit(0 if os.getenv('TOKEN') else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - tasky-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  tasky-network:
+    driver: bridge
+
+# Optional: Database admin tool (SQLite browser)
+# Uncomment to enable access to database via web UI
+# volumes:
+#   db_admin:
+
+# Optional: Redis for caching (if you add that later)
+# redis:
+#   image: redis:7-alpine
+#   container_name: tasky-redis
+#   ports:
+#     - "6379:6379"
+#   networks:
+#     - tasky-network
