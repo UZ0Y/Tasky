@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 # Resolve the file from this script so the launch command can be run anywhere.
 # Override empty inherited variables, which would otherwise hide valid .env values.
 ENV_FILE = Path(__file__).resolve().parent / ".env"
-ENV_FILE_LOADED = load_dotenv(ENV_FILE, override=True)
+ENV_FILE_LOADED = load_dotenv(ENV_FILE, override=True, encoding="utf-8-sig")
 
 # ============================================================================
 # LOGGING SETUP
