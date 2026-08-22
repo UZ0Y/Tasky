@@ -19,6 +19,11 @@ import signal
 from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
+from dotenv import load_dotenv
+
+
+# Resolve the file from this script so the launch command can be run anywhere.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # ============================================================================
 # CONFIGURATION & LOGGING SETUP

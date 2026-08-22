@@ -13,6 +13,11 @@ import os
 import sys
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
+
+
+# Resolve the file from this script so the launch command can be run anywhere.
+load_dotenv(Path(__file__).resolve().parent / ".env")
 
 # ============================================================================
 # LOGGING SETUP
