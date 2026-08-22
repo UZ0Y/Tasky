@@ -23,7 +23,9 @@ from dotenv import load_dotenv
 
 
 # Resolve the file from this script so the launch command can be run anywhere.
-load_dotenv(Path(__file__).resolve().parent / ".env")
+# Override empty inherited variables, which would otherwise hide valid .env values.
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+ENV_FILE_LOADED = load_dotenv(ENV_FILE, override=True)
 
 # ============================================================================
 # CONFIGURATION & LOGGING SETUP
@@ -50,6 +52,8 @@ def validate_environment() -> None:
     Validates that all required environment variables are set.
     Exits immediately with a helpful error message if any are missing.
     """
+    logger.info("Environment file %s: %s", ENV_FILE, "loaded" if ENV_FILE_LOADED else "not found or empty")
+
     required_vars = {
         "TOKEN": "Discord bot token",
         "GEMINI_API_KEY": "Google Gemini API key",
