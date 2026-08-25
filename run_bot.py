@@ -13,6 +13,13 @@ import os
 import sys
 import logging
 from pathlib import Path
+from dotenv import load_dotenv
+
+
+# Resolve the file from this script so the launch command can be run anywhere.
+# Override empty inherited variables, which would otherwise hide valid .env values.
+ENV_FILE = Path(__file__).resolve().parent / ".env"
+ENV_FILE_LOADED = load_dotenv(ENV_FILE, override=True, encoding="utf-8-sig")
 
 # ============================================================================
 # LOGGING SETUP
@@ -32,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 def check_env() -> None:
     """Quick environment validation."""
+    load_dotenv()
+    logger.info("Environment file %s: %s", ENV_FILE, "loaded" if ENV_FILE_LOADED else "not found or empty")
     required = ["TOKEN", "GEMINI_API_KEY"]
     missing = [var for var in required if not os.getenv(var)]
     
