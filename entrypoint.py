@@ -52,6 +52,7 @@ def validate_environment() -> None:
     Validates that all required environment variables are set.
     Exits immediately with a helpful error message if any are missing.
     """
+    load_dotenv()
     logger.info("Environment file %s: %s", ENV_FILE, "loaded" if ENV_FILE_LOADED else "not found or empty")
 
     required_vars = {

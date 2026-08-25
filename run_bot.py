@@ -39,6 +39,7 @@ logger = logging.getLogger(__name__)
 
 def check_env() -> None:
     """Quick environment validation."""
+    load_dotenv()
     logger.info("Environment file %s: %s", ENV_FILE, "loaded" if ENV_FILE_LOADED else "not found or empty")
     required = ["TOKEN", "GEMINI_API_KEY"]
     missing = [var for var in required if not os.getenv(var)]
