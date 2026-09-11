@@ -20,6 +20,10 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from typing import Optional
 
+from dotenv import load_dotenv
+
+load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env")
+
 # ============================================================================
 # CONFIGURATION & LOGGING SETUP
 # ============================================================================
